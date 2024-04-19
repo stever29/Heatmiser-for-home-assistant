@@ -36,9 +36,11 @@ async def async_setup_entry(hass, entry, async_add_entities):
     (devices_data, system_data) = coordinator.data
     timers = {device.name : device for device in devices_data[TIMECLOCKS]}
     
-    entities = [NeoTimerEntity(timer, coordinator, NEO_STAT) for timer in timers.values()]
-    
-    _LOGGER.info(f"Adding Timers: {entities}")
+    entities1 = [NeoTimerEntity(timer, coordinator, NEO_STAT) for timer in timers.values()]
+    entities2 = [NeoTimerAwayEntity(timer, coordinator, NEO_STAT) for timer in timers.values()]
+    entities = entities1 + entities2
+
+    _LOGGER.error(f"Adding Timers: {entities}")
     async_add_entities(entities, True)
     
 class NeoTimerEntity(CoordinatorEntity, SwitchEntity):
@@ -124,6 +126,98 @@ class NeoTimerEntity(CoordinatorEntity, SwitchEntity):
             response = await self._timer.set_timer_hold(value, self._holdfor if value else 0)
             _LOGGER.info(f"{self.name} : Called set_timer_hold with: {value} (response: {response})")
             self.data.timer_on = value
+            self.async_write_ha_state()
+        elif self._type == NEO_PLUG:
+            response = await self._hub.set_timer(value, [self])
+
+class NeoTimerAwayEntity(CoordinatorEntity, SwitchEntity):
+    """ Represents a Heatmiser neoStat thermostat. """
+    def __init__(self, timer: NeoStat, coordinator: DataUpdateCoordinator, type):
+        super().__init__(coordinator)
+        _LOGGER.debug(f"Creating {timer}")
+        
+        self._timer = timer
+        self._coordinator = coordinator
+        self._type = type
+        self._state = timer.standby
+        self._holdfor = 30
+
+    @property
+    def data(self):
+        """Helper to get the data for the current thermostat. """
+        (devices, _) = self._coordinator.data
+        timers = {device.name : device for device in devices[TIMECLOCKS]}
+        return timers[self.original_name]
+        
+    @property
+    def should_poll(self):
+        """ Don't poll - we fetch the data from the hub all at once """
+        return False
+        
+    @property
+    def original_name(self):
+        """ Returns the name. """
+        return self._timer.name
+
+    @property
+    def name(self):
+        """ Returns the name. """
+        return self._timer.name + ' Standby'
+
+    @property
+    def unique_id(self):
+        """Return a unique ID"""
+        return self._timer.name + '_standby'
+
+    @property
+    def state(self):
+        """Return the entity state."""
+        return 'on' if self.data.standby else 'off'
+        
+    @property
+    def is_on(self):
+        """Return true if the switch is on."""
+        return bool(self._state)
+
+    @property
+    def available(self):
+        """Return true if the entity is available."""
+        return True
+      
+    @property
+    def extra_state_attributes(self):
+        """Return the additional state attributes."""
+        attributes = {}
+        attributes['offline'] = self.data.offline
+        attributes['standby'] = self.data.standby
+        return attributes
+       
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {("heatmiser neoStat", self._timer.name)},
+            "name": self._timer.name,
+            "manufacturer": "Heatmiser",
+            "model": "neoTimer"
+        }
+    
+    async def async_turn_on(self, **kwargs):
+        """ Turn the switch on. """
+        _LOGGER.info(f"{self.name} : Executing turn_on() with: {kwargs}")
+        
+        await self.async_switch_on(True)
+        
+    async def async_turn_off(self, **kwargs):
+        """ Turn the switch off. """
+        _LOGGER.info(f"{self.name} : Executing turn_off() with: {kwargs}")
+        
+        await self.async_switch_on(False)
+
+    async def async_switch_on(self, value: bool):
+        if self._type == NEO_STAT:
+            response = await self._timer.set_frost(value)
+            _LOGGER.info(f"{self.name} : Called set_frost with: {value} (response: {response})")
+            self.data.standby = value
             self.async_write_ha_state()
             
         elif self._type == NEO_PLUG:
